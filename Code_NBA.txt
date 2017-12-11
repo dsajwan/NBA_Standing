@@ -1,0 +1,297 @@
+﻿import os
+import numpy
+import pandas
+import numpy as np
+import pandas as pd
+
+
+data_filename = os.path.join('C:/Users/deepankar/data_folder', "leagues_NBA_2014_games.csv")
+
+from sklearn.metrics import f1_score, make_scorer, classification_report
+scorer = make_scorer(f1_score, pos_label=None, avergae='weighted')
+results = pd.read_csv(data_filename)
+results = pd.read_csv(data_filename, parse_dates=["Date"])
+results.columns = ["Date", "Score Type", "Visitor Team", "VisitorPts", "Home Team", "HomePts", "OT?", "Notes"]
+results.ix[:5]
+
+results["HomeWin"] = results["VisitorPts"] < results["HomePts"]
+y_true = results["HomeWin"].values
+results.ix[:5]
+
+
+n_games = results["HomeWin"].count()
+n_homewins = results["HomeWin"].sum()
+win_percentage = n_homewins / n_games
+print("Home Win percentage: {0:.1f}%".format(100 * win_percentage))
+
+from sklearn.metrics import f1_score
+y_pred = [1] * len(y_true)
+print("F1: {:.4f}".format(f1_score(y_true, y_pred, pos_label=None, average='weighted')))
+
+results["HomeLastWin"] = False
+results["VisitorLastWin"] = False
+
+from collections import defaultdict
+won_last = defaultdict(int)
+
+for index, row in results.iterrows():
+    home_team = row["Home Team"]
+    visitor_team = row["Visitor Team"]
+    row["HomeLastWin"] = won_last[home_team]
+    row["VisitorLastWin"] = won_last[visitor_team]
+    results.ix[index] = row
+    won_last[home_team] = row["HomeWin"]
+    won_last[visitor_team] = not row["HomeWin"]
+
+results.ix[20:25][['Date', 'Visitor Team', 'VisitorPts', 'Home Team', 'HomePts', 'HomeWin', 'HomeLastWin', 'VisitorLastWin']]
+
+from sklearn.tree import DecisionTreeClassifier
+clf = DecisionTreeClassifier(random_state=14)
+X_previouswins = results[["HomeLastWin", "VisitorLastWin"]].values
+clf = DecisionTreeClassifier(random_state=14)
+
+from sklearn.cross_validation import cross_val_score
+scores = cross_val_score(clf, X_previouswins, y_true, scoring='accuracy')
+print("F1: {0:.4f}".format(np.mean(scores) * 100))
+
+results["HomeWinStreak"] = 0
+results["VisitorWinStreak"] = 0
+
+from collections import defaultdict
+win_streak = defaultdict(int)
+
+for index, row in results.iterrows():
+    home_team = row["Home Team"]
+    visitor_team = row["Visitor Team"]
+    row["HomeWinStreak"] = win_streak[home_team]
+    row["VisitorWinStreak"] = win_streak[visitor_team]
+    results.ix[index] = row
+    if row["HomeWin"]:
+        win_streak[home_team] += 1
+        win_streak[visitor_team] = 0
+    else:
+        win_streak[home_team] = 0
+        win_streak[visitor_team] += 1
+
+results[50:60][['Date', 'Visitor Team', 'VisitorPts', 'Home Team', 'HomePts', 'HomeWin', 'HomeWinStreak', 'VisitorWinStreak']]
+
+clf = DecisionTreeClassifier(random_state=14)
+X_winstreak = results[["HomeLastWin", "VisitorLastWin", "HomeWinStreak", "VisitorWinStreak"]].values
+scores = cross_val_score(clf, X_winstreak, y_true, scoring='accuracy')
+print("Using whether home team is ranked higher")
+print("F1: {0:.4f}".format(np.mean(scores) * 100))
+
+ladder_filename = os.path.join('C:/Users/deepankar/data_folder', "NBA_2013_standings.csv")
+ladder = pd.read_csv(ladder_filename, skiprows=[0,1], index_col="Team")
+ladder[:5]
+
+def home_team_ranks_higher(row):
+    home_team = row["Home Team"]
+    visitor_team = row["Visitor Team"]
+    if home_team == "New Orleans Pelicans":
+        home_team = "New Orleans Hornets"
+    elif visitor_team == "New Orleans Pelicans":
+        visitor_team = "New Orleans Hornets"
+    home_rank = ladder.loc[home_team]["Rk"]
+    visitor_rank = ladder.loc[visitor_team]["Rk"]
+    return home_rank < visitor_rank
+
+results["HomeTeamRanksHigher"] = results.apply(home_team_ranks_higher, axis=1)
+results[:5][['Date', 'Visitor Team', 'VisitorPts', 'Home Team', 'HomePts', 'HomeWin', 'HomeTeamRanksHigher']]
+
+X_homehigher = results[["HomeLastWin", "VisitorLastWin", "HomeTeamRanksHigher"]].values
+clf = DecisionTreeClassifier(random_state=14)
+scores = cross_val_score(clf, X_homehigher, y_true, scoring='accuracy')
+print("Using whether home team is ranked higher")
+print("F1: {0:.4f}".format(np.mean(scores)*100))
+
+from sklearn.grid_search import GridSearchCV
+parameter_space = { "max_depth": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],}
+clf = DecisionTreeClassifier(random_state=14)
+grid = GridSearchCV(clf, parameter_space, scoring='accuracy')
+grid.fit(X_homehigher, y_true)
+print("F1: {0:.4f}".format(grid.best_score_))
+
+last_match_winner = defaultdict(int)
+def home_team_won_last(row):
+    home_team = row["Home Team"]
+    visitor_team = row["Visitor Team"]
+    teams = tuple(sorted([home_team, visitor_team]))
+    result = 1 if last_match_winner[teams] == row ["Home Team"] else 0
+    winner = row["Home Team"] if row["HomeWin"] else row["Visitor Team"]
+    last_match_winner[teams] = winner
+    return result
+
+results["HomeTeamWonLast"] = results.apply(home_team_won_last, axis=1)
+results[90:100][['Date','Visitor Team', 'VisitorPts', 'Home Team', 'HomePts', 'HomeWin', 'HomeTeamWonLast']]
+
+X_home_higher = results[["HomeLastWin", "VisitorLastWin", "HomeTeamRanksHigher","HomeTeamWonLast"]].values
+clf = DecisionTreeClassifier(random_state=14)
+scores = cross_val_score(clf, X_home_higher, y_true, scoring='accuracy')
+print("Using whether home team is ranked higher")
+print("F1: {0:.4f}".format(np.mean(scores)))
+results["Home Team"].values
+
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+encoding = LabelEncoder()
+encoding.fit(results["Home Team"].values)
+
+home_teams = encoding.transform(results["Home Team"].values)
+visitor_teams = encoding.transform(results["Visitor Team"].values)
+X_teams = np.vstack([home_teams, visitor_teams]).T
+X_teams[:5]
+X_teams.shape
+
+onehot = OneHotEncoder()
+X_teams = onehot.fit_transform(X_teams).todense()
+
+X_teams.shape
+print("Home:", X_teams[0,:30])
+print("Visitor:", X_teams[0,30:])
+
+clf = DecisionTreeClassifier(random_state=14)
+scores = cross_val_score(clf, X_teams, y_true, scoring='accuracy')
+print("F1: {0:.4f}".format(np.mean(scores)))
+
+from sklearn.ensemble import RandomForestClassifier
+clf = RandomForestClassifier(random_state=14)
+scores = cross_val_score(clf, X_teams, y_true, scoring='accuracy')
+print("Full team is ranked higher");
+print("F1: {0:.4f}".format(np.mean(scores)))
+
+
+
+parameter_space = {"max_features": [2, 10, 50, 'auto'], "n_estimators": [50, 100, 200],
+                   "criterion": ["gini", "entropy"],
+                    "min_samples_leaf": [1, 2, 4, 6],
+			}
+
+clf = RandomForestClassifier(random_state=14)
+grid = GridSearchCV(clf, parameter_space, scoring='accuracy')
+grid.fit(X_teams, y_true)
+print("F1: {0:.4f}".format(grid.best_score_))
+print(grid.best_estimator_)
+
+X_all = np.hstack([X_home_higher, X_teams])
+print(X_all.shape)
+
+
+clf = DecisionTreeClassifier(random_state=14)
+scores = cross_val_score(clf, X_all, y_true, scoring='accuracy')
+print("F1: {0:.4f}".format(np.mean(scores)))
+
+                   
+parameter_space = {"max_features": [2, 10, 50, 'auto'], "n_estimators": [50, 100, 200],
+                   "criterion": ["gini", "entropy"],
+                    "min_samples_leaf": [1, 2, 4, 6],
+			}
+
+clf = RandomForestClassifier(random_state=14)
+grid = GridSearchCV(clf, parameter_space, scoring='accuracy')
+grid.fit(X_all, y_true)
+print("F1: {0:.4f}".format(grid.best_score_))
+print(grid.best_estimator_)
+                
+
+------------------------------------------------------------Testing data set code------------------------------------------------------------------------
+test_data_filename = os.path.join('C:/Users/deepankar/data_folder', "leagues_NBA_2015_games.csv")
+games_2015 = pd.read_csv(test_data_filename)
+games_2015.columns = ["Date", "Score Type", "Visitor Team", "VisitorPts", "Home Team", "HomePts", "OT?", "Notes"]
+games_2015["HomeWin"] = games_2015["VisitorPts"] < games_2015["HomePts"]
+games_2015.ix[:5]
+games_2015["HomeLastWin"] = False
+games_2015["VisitorLastWin"] = False
+
+from collections import defaultdict
+won_last = defaultdict(int)
+
+for index, row in games_2015.iterrows():
+    home_team = row["Home Team"]
+    visitor_team = row["Visitor Team"]
+    row["HomeLastWin"] = won_last[home_team]
+    row["VisitorLastWin"] = won_last[visitor_team]
+    games_2015.ix[index] = row
+    won_last[home_team] = row["HomeWin"]
+    won_last[visitor_team] = not row["HomeWin"]
+
+games_2015.ix[20:25][['Date', 'Visitor Team', 'VisitorPts', 'Home Team', 'HomePts', 'HomeWin', 'HomeLastWin', 'VisitorLastWin']]
+
+
+games_2015["HomeWinStreak"] = 0
+games_2015["VisitorWinStreak"] = 0
+
+from collections import defaultdict
+win_streak = defaultdict(int)
+
+for index, row in games_2015.iterrows():
+    home_team = row["Home Team"]
+    visitor_team = row["Visitor Team"]
+    row["HomeWinStreak"] = win_streak[home_team]
+    row["VisitorWinStreak"] = win_streak[visitor_team]
+    games_2015.ix[index] = row
+    if row["HomeWin"]:
+        win_streak[home_team] += 1
+        win_streak[visitor_team] = 0
+    else:
+        win_streak[home_team] = 0
+        win_streak[visitor_team] += 1
+
+games_2015[50:60][['Date', 'Visitor Team', 'VisitorPts', 'Home Team', 'HomePts', 'HomeWin', 'HomeWinStreak', 'VisitorWinStreak']]
+ladder_2014_filename = os.path.join('C:/Users/deepankar/data_folder', "NBA_2014_standings.csv")
+ladder_2014 = pd.read_csv(ladder_2014_filename, skiprows=[0,1], index_col="Team")
+ladder_2014[:5]
+
+def home_team_ranks_higher_2014(row):
+    home_team = row["Home Team"]
+    visitor_team = row["Visitor Team"]
+    if home_team == "Charlotte Hornets":
+        home_team = "Charlotte Bobcats"
+    elif visitor_team == "Charlotte Hornets":
+        visitor_team = "Charlotte Bobcats"
+    home_rank = ladder_2014.loc[home_team]["Rk"]
+    visitor_rank = ladder_2014.loc[visitor_team]["Rk"]
+    return home_rank < visitor_rank
+
+games_2015["HomeTeamRanksHigher"] = games_2015.apply(home_team_ranks_higher_2014, axis=1)
+games_2015[:5][['Date', 'Visitor Team', 'VisitorPts', 'Home Team', 'HomePts', 'HomeWin', 'HomeTeamRanksHigher']]
+
+last_match_winner = defaultdict(int)
+def home_team_won_last_2015(row):
+    home_team = row["Home Team"]
+    visitor_team = row["Visitor Team"]
+    teams = tuple(sorted([home_team, visitor_team]))
+    games_2015 = 1 if last_match_winner[teams] == row ["Home Team"] else 0
+    winner = row["Home Team"] if row["HomeWin"] else row["Visitor Team"]
+    last_match_winner[teams] = winner
+    return games_2015
+games_2015["HomeTeamWonLast"] = games_2015.apply(home_team_won_last_2015, axis=1)
+
+
+home_teams_2015 = encoding.transform(games_2015["Home Team"].values)
+visitor_teams_2015 = encoding.transform(games_2015["Visitor Team"].values)
+X_teams_2015 = np.vstack([home_teams_2015, visitor_teams_2015]).T
+X_teams_2015 = onehot.transform(X_teams_2015).todense()
+X_home_higher_2015 = games_2015[["HomeLastWin", "VisitorLastWin", "HomeTeamRanksHigher","HomeTeamWonLast"]].values
+X_all_2015 = np.hstack([X_home_higher_2015, X_teams_2015])
+X_all_2015.shape
+y_test = games_2015["HomeWin"].values
+
+
+print("The home team wins: {0:.2f}% of matches".format(100*np.mean(y_test)))
+from sklearn.metrics import f1_score
+y_pred = [1] * len(y_test)
+print("F1: {:.4f}".format(f1_score(y_test, y_pred, pos_label=None, average='weighted')))
+print(classification_report(y_test, y_pred))
+
+
+grid.fit(X_all, y_true)
+y_pred = grid.predict(X_all_2015)
+from sklearn.metrics import f1_score, make_scorer, classification_report
+
+print(classification_report(y_test, y_pred))
+
+print("The result is getting {:.1f}% of prediction correct".format(100*np.mean(y_pred == y_test)))
+
+
+
+
